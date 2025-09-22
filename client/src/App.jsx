@@ -11,16 +11,14 @@ function Protected({children}){
   }
 
 
-function App(){
-  return(
-<BrowserRouter>
-<Routes>
-  <Route path="/login" element={<Login/>}/>
-  <Route path="/register" element={<Register/>}/>
-  <Route path="/" element={<Protected> <Notes/></Protected>}/>
-  <Route path="/new" element={<Login/>}/>
-  <Route path="/note/:id" element={<Login/>}/>
-</Routes>
-</BrowserRouter>
+export default function App() {
+  return (
+    <Router>
+      <Routes>
+        <Route path="/register" element={<Register />} />
+        <Route path="/login" element={<Login />} />
+        <Route path="*" element={<Register />} /> {/* Domyślnie rejestracja */}
+      </Routes>
+    </Router>
   );
 }
