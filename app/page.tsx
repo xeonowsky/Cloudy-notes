@@ -1,69 +1,103 @@
 import Image from "next/image";
+import Link from "next/link";
+import FeatureIcon from "./components/feature-icon";
+import { FEATURES } from "./lib/features";
+import { getCurrentUser } from "./lib/session";
 
-export default function Home() {
+export default async function Home() {
+  // Przyciski w hero zależą od tego, czy ktoś jest zalogowany
+  const user = await getCurrentUser();
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
+    <div className="relative isolate flex flex-1 flex-col items-center overflow-hidden font-sans">
+      {/* Hero. <section> zamiast <main>, bo <main> jest już w layout.tsx */}
+      <section className="mx-auto grid w-full max-w-6xl items-center gap-12 px-4 pt-12 pb-20 lg:grid-cols-[1fr_1.15fr] lg:gap-16 lg:pt-20 lg:pb-28">
+        <div className="max-w-xl">
+          <h1 className="text-[2.75rem] leading-[1.05] font-semibold tracking-[-0.03em] text-ink sm:text-[3.5rem] dark:text-white">
+            Zapisuj pomysły, zanim odpłyną
           </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+          <p className="mt-5 text-lg leading-relaxed text-ink/70 dark:text-white/70">
+            Cloudy Notes to darmowa aplikacja do notatek w przeglądarce. Formatowanie, listy zadań i kolorowe
+            karty, bez instalowania czegokolwiek.
           </p>
+
+          <div className="mt-9 flex flex-wrap items-center gap-3">
+            {user ? (
+              <Link
+                href="/notatki"
+                className="rounded-xl bg-brand-deep px-6 py-3.5 font-semibold text-white duration-200 hover:bg-[#174744] focus-visible:ring-4 focus-visible:ring-brand/40 focus-visible:outline-none dark:bg-brand dark:text-ink"
+              >
+                Przejdź do notatek
+              </Link>
+            ) : (
+              <>
+                <Link
+                  href="/register"
+                  className="rounded-xl bg-brand-deep px-6 py-3.5 font-semibold text-white duration-200 hover:bg-[#174744] focus-visible:ring-4 focus-visible:ring-brand/40 focus-visible:outline-none dark:bg-brand dark:text-ink"
+                >
+                  Załóż darmowe konto
+                </Link>
+                <Link
+                  href="/logowanie"
+                  className="rounded-xl border-[1.5px] border-line px-6 py-3.5 font-semibold text-ink duration-200 hover:border-brand-deep hover:bg-mist dark:border-white/15 dark:text-white dark:hover:bg-white/5"
+                >
+                  Zaloguj się
+                </Link>
+              </>
+            )}
+          </div>
+          {!user && (
+            <p className="mt-4 text-sm text-ink/55 dark:text-white/55">
+              Bez karty płatniczej i bez limitu notatek.
+            </p>
+          )}
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+
+        <div className="relative">
+          {/* Miękka "mgiełka" w kolorze marki za zdjęciem */}
+          <div aria-hidden className="absolute -inset-4 -z-10 rounded-[2.5rem] bg-mist dark:bg-[#12302e]" />
+          <Image
+            src="/images/note.webp"
+            alt="Notes w kształcie chmury leżący na drewnianym biurku"
+            width={989}
+            height={672}
+            priority
+            className="h-auto w-full rounded-[2rem] shadow-[0_30px_60px_-30px_rgba(22,48,47,0.5)]"
+          />
         </div>
-      </main>
+      </section>
+
+      {/* Możliwości — tu prowadzą linki z menu (/#formatowanie itd.) */}
+      <section id="mozliwosci" className="mx-auto w-full max-w-6xl scroll-mt-24 px-4 pb-24">
+        <h2 className="text-[2rem] leading-tight font-semibold tracking-[-0.02em] text-ink dark:text-white">
+          Wszystko, czego potrzebuje dobra notatka
+        </h2>
+        <p className="mt-3 max-w-xl text-ink/65 dark:text-white/65">
+          Bez zbędnych funkcji. Piszesz, formatujesz i wracasz do tego, co ważne.
+        </p>
+
+        <ul className="mt-10 grid gap-x-10 gap-y-8 sm:grid-cols-2">
+          {FEATURES.map((feature) => (
+            // scroll-mt-24 — kotwica nie chowa się pod przyklejonym menu
+            <li key={feature.id} id={feature.id} className="flex scroll-mt-24 gap-4">
+              <FeatureIcon icon={feature.icon} className="size-12" />
+              <div>
+                <h3 className="text-lg font-semibold text-ink dark:text-white">{feature.title}</h3>
+                <p className="mt-1 leading-relaxed text-ink/65 dark:text-white/65">{feature.description}</p>
+              </div>
+            </li>
+          ))}
+        </ul>
+
+        {!user && (
+          <Link
+            href="/register"
+            className="mt-12 inline-flex rounded-xl bg-brand-deep px-6 py-3 font-semibold text-white duration-200 hover:bg-[#174744] focus-visible:ring-4 focus-visible:ring-brand/40 focus-visible:outline-none dark:bg-brand dark:text-ink"
+          >
+            Załóż darmowe konto
+          </Link>
+        )}
+      </section>
     </div>
   );
 }
