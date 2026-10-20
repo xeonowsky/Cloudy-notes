@@ -17,8 +17,7 @@ function field(formData: FormData, name: string): string {
 }
 
 export async function signup(_prev: FormState, formData: FormData): Promise<FormState> {
-  // Object.fromEntries zamienia FormData na zwykły obiekt { name: "...", email: "..." }.
-  // Zod sam pomija pola, których nie ma w schemacie.
+
   const result = SignupSchema.safeParse(Object.fromEntries(formData));
   const values = { name: field(formData, "name"), email: field(formData, "email") };
 

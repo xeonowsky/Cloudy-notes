@@ -2,6 +2,7 @@ import Image from "next/image";
 import Link from "next/link";
 import NavLinks, { type NavLink } from "./nav/nav-links";
 import FeaturesMenu from "./nav/features-menu";
+import ToolsMenu from "./nav/tools-menu";
 import MobileMenu from "./nav/mobile-menu";
 import { getCurrentUser } from "../lib/session";
 import { logout } from "../actions/auth";
@@ -9,15 +10,9 @@ import { logout } from "../actions/auth";
 export default async function MainNavbar() {
   const user = await getCurrentUser();
 
-  // Lewa strona: nawigacja po aplikacji (tylko dla zalogowanych)
-  const appLinks: NavLink[] = user
-    ? [
-        { name: "Notatki", href: "/notatki" },
-        { name: "Konto", href: "/konto" },
-      ]
-    : [];
-  // Prawa strona: linki ogólne
   const contactLink: NavLink[] = [{ name: "Kontakt", href: "/contact" }];
+  // Na telefonie nie ma awatara z linkiem do konta, więc Konto trafia do listy
+  const mobileLinks: NavLink[] = user ? [{ name: "Konto", href: "/konto" }, ...contactLink] : contactLink;
 
   return (
     // sticky + półprzezroczyste tło z rozmyciem: menu zostaje na górze przy przewijaniu
@@ -30,12 +25,13 @@ export default async function MainNavbar() {
 
         {/* Lewa strona */}
         <div className="hidden items-center gap-1 md:flex">
-          <NavLinks links={appLinks} />
           <FeaturesMenu loggedIn={!!user} />
         </div>
 
         {/* Prawa strona */}
         <div className="ml-auto hidden items-center gap-2 md:flex">
+          {/* Narzędzia (Notatki, Board) — tylko dla zalogowanych */}
+          {user && <ToolsMenu />}
           <NavLinks links={contactLink} />
           <span aria-hidden className="mx-1 h-6 w-px bg-line dark:bg-white/10" />
 
@@ -81,7 +77,7 @@ export default async function MainNavbar() {
         </div>
 
         <div className="ml-auto md:hidden">
-          <MobileMenu links={[...appLinks, ...contactLink]} userName={user?.name ?? null} />
+          <MobileMenu links={mobileLinks} userName={user?.name ?? null} />
         </div>
       </nav>
     </header>

@@ -1,5 +1,6 @@
 // Lista możliwości aplikacji — jedno źródło dla menu i strony głównej.
-export type FeatureIcon = "format" | "list" | "color" | "lock";
+// "notes" i "board" to ikony narzędzi (menu Narzędzia, app/lib/tools.ts)
+export type FeatureIcon = "format" | "list" | "color" | "lock" | "notes" | "board";
 
 export type Feature = {
   id: string; // kotwica na stronie głównej, np. /#formatowanie

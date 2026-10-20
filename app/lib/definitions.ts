@@ -1,5 +1,6 @@
 import * as z from "zod";
 import { NOTE_COLOR_KEYS } from "./note-colors";
+import { ROADMAP_STATUS_KEYS, SHAPE_COLOR_KEYS, SHAPE_KINDS } from "./roadmap-types";
 
 // ─────────────────────────────────────────────────────────────
 // Schematy Zoda — jedno miejsce, które opisuje, jak wyglądają
@@ -116,3 +117,50 @@ export type NoteFormState =
       message?: string;
     }
   | undefined;
+
+// ─────────────────────────────────────────────────────────────
+// Board
+// Server actions tablicy dostają zwykłe obiekty (nie FormData),
+// ale to nadal dane od klienta — sprawdzamy je tak samo dokładnie.
+// ─────────────────────────────────────────────────────────────
+
+const coordinate = z.number().int().min(-100_000).max(100_000);
+
+export const RoadmapNodeSchema = z.object({
+  id: z.uuid(),
+  title: z
+    .string()
+    .trim()
+    .min(1, { error: "Nazwa nie może być pusta." })
+    .max(80, { error: "Nazwa może mieć maksymalnie 80 znaków." }),
+  category: z.string().trim().max(40, { error: "Kategoria może mieć maksymalnie 40 znaków." }),
+  status: z.enum(ROADMAP_STATUS_KEYS),
+  x: coordinate,
+  y: coordinate,
+});
+
+// .pick — nowy schemat złożony tylko z wybranych pól, bez przepisywania reguł
+export const RoadmapNodeUpdateSchema = RoadmapNodeSchema.pick({ title: true, category: true, status: true });
+export const RoadmapPositionSchema = RoadmapNodeSchema.pick({ x: true, y: true });
+
+export const RoadmapEdgeSchema = z
+  .object({ id: z.uuid(), sourceId: z.uuid(), targetId: z.uuid() })
+  .refine((edge) => edge.sourceId !== edge.targetId, { error: "Element nie może wskazywać sam na siebie." });
+
+export const UuidSchema = z.uuid();
+
+const shapeSize = z.number().int().min(20).max(5_000);
+
+export const RoadmapShapeSchema = z.object({
+  id: z.uuid(),
+  kind: z.enum(SHAPE_KINDS),
+  x: coordinate,
+  y: coordinate,
+  w: shapeSize,
+  h: shapeSize,
+  text: z.string().max(2_000, { error: "Tekst może mieć maksymalnie 2000 znaków." }),
+  color: z.enum(SHAPE_COLOR_KEYS),
+});
+
+// Rodzaju kształtu nie da się zmienić po utworzeniu — reszta tak
+export const RoadmapShapeUpdateSchema = RoadmapShapeSchema.omit({ id: true, kind: true });

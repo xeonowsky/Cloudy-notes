@@ -12,6 +12,7 @@ export default async function Footer() {
       links: user
         ? [
             { name: "Moje notatki", href: "/notatki" },
+            { name: "Board", href: "/board" },
             { name: "Nowa notatka", href: "/notatki/nowa" },
             { name: "Konto", href: "/konto" },
           ]

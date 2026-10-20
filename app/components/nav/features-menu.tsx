@@ -1,38 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useId, useRef, useState } from "react";
 import FeatureIcon from "../feature-icon";
+import { useDropdown } from "./use-dropdown";
 import { FEATURES } from "@/app/lib/features";
 
 // Rozwijane menu "Możliwości": lista funkcji + karta z wezwaniem do działania (CTA).
-// Otwiera się kliknięciem, zamyka: ponownym kliknięciem, klawiszem Escape,
-// kliknięciem poza menu albo wybraniem linku.
+// Otwieranie i zamykanie: hook useDropdown (wspólny z menu "Narzędzia").
 export default function FeaturesMenu({ loggedIn }: { loggedIn: boolean }) {
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const panelId = useId();
-
-  useEffect(() => {
-    if (!open) return;
-
-    function onPointerDown(event: PointerEvent) {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
-    }
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") setOpen(false);
-    }
-
-    document.addEventListener("pointerdown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
-    // sprzątanie: usuwamy nasłuchiwanie, gdy menu się zamknie
-    return () => {
-      document.removeEventListener("pointerdown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [open]);
-
-  const close = () => setOpen(false);
+  const { open, rootRef, panelId, toggle, close, buttonProps } = useDropdown();
 
   const cta = loggedIn
     ? { title: "Masz pomysł?", text: "Zapisz go, zanim ucieknie.", label: "Nowa notatka", href: "/notatki/nowa" }
@@ -42,9 +18,8 @@ export default function FeaturesMenu({ loggedIn }: { loggedIn: boolean }) {
     <div ref={rootRef} className="relative">
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        aria-controls={panelId}
+        onClick={toggle}
+        {...buttonProps}
         className={`flex cursor-pointer items-center gap-1 rounded-lg px-3 py-2 text-[0.9375rem] duration-200 hover:bg-mist hover:text-ink focus-visible:ring-2 focus-visible:ring-brand focus-visible:outline-none dark:hover:bg-white/5 dark:hover:text-white ${
           open ? "bg-mist text-ink dark:bg-white/5 dark:text-white" : "text-ink/65 dark:text-white/65"
         }`}

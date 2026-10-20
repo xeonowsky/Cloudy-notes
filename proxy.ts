@@ -13,5 +13,5 @@ export function proxy(request: NextRequest) {
 
 export const config = {
   // Trasy wymagające zalogowania — dopisuj tu kolejne
-  matcher: ["/konto/:path*", "/notatki/:path*"],
+  matcher: ["/konto/:path*", "/notatki/:path*", "/board/:path*"],
 };

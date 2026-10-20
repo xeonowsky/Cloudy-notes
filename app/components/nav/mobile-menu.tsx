@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { logout } from "@/app/actions/auth";
 import type { NavLink } from "./nav-links";
 import { FEATURES } from "@/app/lib/features";
+import { isToolActive, TOOLS } from "@/app/lib/tools";
 
 interface MobileMenuProps {
   links: NavLink[];
@@ -36,6 +37,31 @@ export default function MobileMenu({ links, userName }: MobileMenuProps) {
           <p className="px-3 pt-2 pb-3 text-sm text-ink/60 dark:text-white/60">
             Zalogowano jako <span className="font-semibold text-ink dark:text-white">{userName}</span>
           </p>
+        )}
+
+        {/* Narzędzia — tylko dla zalogowanych */}
+        {userName && (
+          <>
+            <p className="px-3 pt-1 pb-1 text-sm font-semibold text-ink/50 dark:text-white/50">Narzędzia</p>
+            <ul className="mb-2 flex flex-col border-b border-line pb-2 dark:border-white/10">
+              {TOOLS.map((tool) => {
+                const active = isToolActive(tool, pathname);
+                return (
+                  <li key={tool.href}>
+                    <Link
+                      href={tool.href}
+                      aria-current={active ? "page" : undefined}
+                      className={`block rounded-xl px-3 py-2.5 duration-200 hover:bg-mist dark:hover:bg-white/5 ${
+                        active ? "bg-mist font-semibold text-ink dark:bg-white/5 dark:text-white" : "text-ink/75 dark:text-white/75"
+                      }`}
+                    >
+                      {tool.title}
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+          </>
         )}
 
         <ul className="flex flex-col">
