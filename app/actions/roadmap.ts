@@ -100,8 +100,16 @@ export async function deleteRoadmapNode(nodeId: unknown): Promise<ActionResult> 
   if (!id.success) return fail("Nie znaleziono elementu.");
 
   try {
-    // Strzałki tej karty usunie baza (ON DELETE CASCADE)
-    await sql`DELETE FROM roadmap_nodes WHERE id = ${id.data} AND user_id = ${user.id}`;
+    // Strzałki mogą prowadzić do kart i do kształtów, więc nie mają klucza obcego
+    // (ON DELETE CASCADE). Usuwamy je sami — w TYM SAMYM zapytaniu (WITH ... DELETE),
+    // więc albo znika karta razem ze strzałkami, albo nic.
+    await sql`
+      WITH removed_edges AS (
+        DELETE FROM roadmap_edges
+        WHERE user_id = ${user.id} AND (source_id = ${id.data} OR target_id = ${id.data})
+      )
+      DELETE FROM roadmap_nodes WHERE id = ${id.data} AND user_id = ${user.id}
+    `;
   } catch (error) {
     console.error("Błąd usuwania elementu Board:", error);
     return DB_ERROR;
@@ -118,15 +126,19 @@ export async function createRoadmapEdge(input: unknown): Promise<ActionResult> {
 
   const { id, sourceId, targetId } = parsed.data;
   try {
-    // INSERT ... SELECT ... WHERE: wstawiamy wiersz tylko wtedy, gdy OBIE
-    // karty należą do zalogowanego użytkownika. Inaczej dałoby się
-    // "podpiąć" strzałkę do cudzej karty, znając jej id.
+    // INSERT ... SELECT ... WHERE: wstawiamy wiersz tylko wtedy, gdy OBA
+    // końce należą do zalogowanego użytkownika. Inaczej dałoby się
+    // "podpiąć" strzałkę do cudzego obiektu, znając jego id.
+    // Końcem może być karta albo kształt — liczymy trafienia w obu tabelach.
     const rows = await sql`
       INSERT INTO roadmap_edges (id, user_id, source_id, target_id)
       SELECT ${id}, ${user.id}, ${sourceId}, ${targetId}
       WHERE (
-        SELECT count(*) FROM roadmap_nodes
-        WHERE user_id = ${user.id} AND id IN (${sourceId}, ${targetId})
+        SELECT count(*) FROM (
+          SELECT id FROM roadmap_nodes WHERE user_id = ${user.id} AND id IN (${sourceId}, ${targetId})
+          UNION ALL
+          SELECT id FROM roadmap_shapes WHERE user_id = ${user.id} AND id IN (${sourceId}, ${targetId})
+        ) AS owned
       ) = 2
       ON CONFLICT DO NOTHING
       RETURNING id
@@ -164,12 +176,20 @@ export async function createRoadmapShape(input: unknown): Promise<ActionResult> 
   const parsed = RoadmapShapeSchema.safeParse(input);
   if (!parsed.success) return fail("Niepoprawne dane kształtu.");
 
-  const { id, kind, x, y, w, h, text, color } = parsed.data;
+  const { id, kind, x, y, w, h, text, color, noteId, fontSize, textColor, bold, italic, align } = parsed.data;
   try {
-    await sql`
-      INSERT INTO roadmap_shapes (id, user_id, kind, x, y, w, h, text, color)
-      VALUES (${id}, ${user.id}, ${kind}, ${x}, ${y}, ${w}, ${h}, ${text}, ${color})
+    // INSERT ... SELECT ... WHERE — jak przy strzałkach: kafelek może wskazywać
+    // tylko WŁASNĄ notatkę użytkownika (albo żadną)
+    const rows = await sql`
+      INSERT INTO roadmap_shapes
+        (id, user_id, kind, x, y, w, h, text, color, note_id, font_size, text_color, bold, italic, text_align)
+      SELECT ${id}, ${user.id}, ${kind}, ${x}, ${y}, ${w}, ${h}, ${text}, ${color}, ${noteId},
+             ${fontSize}, ${textColor}, ${bold}, ${italic}, ${align}
+      WHERE ${noteId}::uuid IS NULL
+         OR EXISTS (SELECT 1 FROM notes WHERE id = ${noteId} AND user_id = ${user.id})
+      RETURNING id
     `;
+    if (rows.length === 0) return fail("Nie znaleziono notatki.");
   } catch (error) {
     console.error("Błąd tworzenia kształtu Board:", error);
     return DB_ERROR;
@@ -177,7 +197,7 @@ export async function createRoadmapShape(input: unknown): Promise<ActionResult> 
   return OK;
 }
 
-// Jedna akcja na przesunięcie, zmianę rozmiaru, tekstu i koloru —
+// Jedna akcja na przesunięcie, zmianę rozmiaru, tekstu, koloru i stylu tekstu —
 // zawsze wysyłamy cały aktualny stan kształtu.
 export async function updateRoadmapShape(shapeId: unknown, input: unknown): Promise<ActionResult> {
   const user = await getCurrentUser();
@@ -187,12 +207,15 @@ export async function updateRoadmapShape(shapeId: unknown, input: unknown): Prom
   const parsed = RoadmapShapeUpdateSchema.safeParse(input);
   if (!id.success || !parsed.success) return fail("Niepoprawne dane kształtu.");
 
-  const { x, y, w, h, text, color } = parsed.data;
+  const { x, y, w, h, text, color, noteId, fontSize, textColor, bold, italic, align } = parsed.data;
   try {
     const rows = await sql`
       UPDATE roadmap_shapes
-      SET x = ${x}, y = ${y}, w = ${w}, h = ${h}, text = ${text}, color = ${color}, updated_at = now()
+      SET x = ${x}, y = ${y}, w = ${w}, h = ${h}, text = ${text}, color = ${color}, note_id = ${noteId},
+          font_size = ${fontSize}, text_color = ${textColor}, bold = ${bold}, italic = ${italic},
+          text_align = ${align}, updated_at = now()
       WHERE id = ${id.data} AND user_id = ${user.id}
+        AND (${noteId}::uuid IS NULL OR EXISTS (SELECT 1 FROM notes WHERE id = ${noteId} AND user_id = ${user.id}))
       RETURNING id
     `;
     if (rows.length === 0) return fail("Nie znaleziono kształtu.");
@@ -211,7 +234,14 @@ export async function deleteRoadmapShape(shapeId: unknown): Promise<ActionResult
   if (!id.success) return fail("Nie znaleziono kształtu.");
 
   try {
-    await sql`DELETE FROM roadmap_shapes WHERE id = ${id.data} AND user_id = ${user.id}`;
+    // Jak przy kartach: kształt znika razem ze swoimi strzałkami, jednym zapytaniem
+    await sql`
+      WITH removed_edges AS (
+        DELETE FROM roadmap_edges
+        WHERE user_id = ${user.id} AND (source_id = ${id.data} OR target_id = ${id.data})
+      )
+      DELETE FROM roadmap_shapes WHERE id = ${id.data} AND user_id = ${user.id}
+    `;
   } catch (error) {
     console.error("Błąd usuwania kształtu Board:", error);
     return DB_ERROR;

@@ -21,7 +21,8 @@ export async function getRoadmapForUser(userId: string): Promise<Roadmap> {
     `,
     // Kolejność = kolejność rysowania: nowsze kształty leżą wyżej
     sql`
-      SELECT id, kind, x, y, w, h, text, color
+      SELECT id, kind, x, y, w, h, text, color, note_id AS "noteId",
+             font_size AS "fontSize", text_color AS "textColor", bold, italic, text_align AS "align"
       FROM roadmap_shapes
       WHERE user_id = ${userId}
       ORDER BY created_at

@@ -1,5 +1,5 @@
 import type { Note } from "@/app/lib/notes";
-import type { RoadmapEdge, RoadmapNode, RoadmapShape } from "@/app/lib/roadmap-types";
+import { DEFAULT_TEXT_STYLE, type RoadmapEdge, type RoadmapNode, type RoadmapShape } from "@/app/lib/roadmap-types";
 
 export function makeNote(patch: Partial<Note> = {}): Note {
   return {
@@ -24,5 +24,17 @@ export function makeEdge(patch: Partial<RoadmapEdge> = {}): RoadmapEdge {
 }
 
 export function makeShape(patch: Partial<RoadmapShape> = {}): RoadmapShape {
-  return { id: "shape-1", kind: "text", x: 0, y: 0, w: 220, h: 120, text: "", color: "amber", ...patch };
+  return {
+    id: "shape-1",
+    kind: "text",
+    x: 0,
+    y: 0,
+    w: 220,
+    h: 120,
+    text: "",
+    color: "amber",
+    noteId: null,
+    ...DEFAULT_TEXT_STYLE,
+    ...patch,
+  };
 }

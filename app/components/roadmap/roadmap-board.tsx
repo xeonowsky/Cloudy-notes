@@ -14,10 +14,14 @@ import {
   updateRoadmapShape,
 } from "@/app/actions/roadmap";
 import {
+  DEFAULT_TEXT_STYLE,
   NODE_H,
   NODE_W,
+  SHAPE_DEFAULTS,
+  SHAPE_KIND_LABELS,
   SHAPE_MIN,
   type ActionResult,
+  type BoardNote,
   type RoadmapEdge,
   type RoadmapNode,
   type RoadmapShape,
@@ -29,7 +33,11 @@ import NodePanel from "./node-panel";
 import ShapeView from "./shape-view";
 import ShapePanel from "./shape-panel";
 import Toolbar, { type Tool } from "./toolbar";
-import { clamp } from "./geometry";
+import NotePicker from "./note-picker";
+import type { AddKind } from "./add-menu";
+import { parseChecklist } from "@/app/lib/checklist";
+import { parseCalendar } from "@/app/lib/calendar";
+import { clamp, nodeBox, type Box } from "./geometry";
 
 // ─────────────────────────────────────────────────────────────
 // Jak działa tablica (whiteboard):
@@ -41,9 +49,11 @@ import { clamp } from "./geometry";
 //    świat = (ekran - przesunięcie) / scale
 // 3. Narzędzie (tool) decyduje, co robi kliknięcie w tablicę:
 //    select  — zaznacz / przeciągnij / zmień rozmiar / przesuń widok
+//    hand    — tylko przesuwanie widoku (obiektów nie da się ruszyć);
+//              to samo daje przytrzymana SPACJA albo środkowy przycisk myszy
 //    rect    — przeciągnij, aby narysować prostokąt
 //    text    — kliknij, aby wstawić blok tekstu
-//    connect — kliknij kartę źródłową, potem docelową
+//    connect — kliknij obiekt źródłowy (kartę LUB kształt), potem docelowy
 // 4. Zdarzenia wskaźnika obsługuje JEDEN element — viewport. Po kliknięciu
 //    sprawdzamy, CO kliknięto (data-node-id, data-shape-id…) i zapamiętujemy
 //    trwającą interakcję w refie. setPointerCapture daje nam ruchy myszy
@@ -72,14 +82,23 @@ const GRID = 24; // odstęp kropek w tle
 
 const TOOL_HINTS: Record<Tool, string | null> = {
   select: null,
+  hand: "Przeciągaj, aby przesuwać widok",
   rect: "Przeciągnij po tablicy, aby narysować prostokąt",
   text: "Kliknij w tablicę, aby wstawić blok tekstu",
   connect: "Kliknij element, od którego ma wyjść strzałka",
 };
 
-type Props = { initialNodes: RoadmapNode[]; initialEdges: RoadmapEdge[]; initialShapes: RoadmapShape[] };
+type Props = {
+  initialNodes: RoadmapNode[];
+  initialEdges: RoadmapEdge[];
+  initialShapes: RoadmapShape[];
+  notes?: BoardNote[]; // notatki użytkownika — do kafelków "Notatka z Cloudy Notes"
+};
 
-export default function RoadmapBoard({ initialNodes, initialEdges, initialShapes }: Props) {
+// Okno wyboru notatki: shapeId = null → nowy kafelek, id → podmiana notatki w kafelku
+type Picker = { shapeId: string | null } | null;
+
+export default function RoadmapBoard({ initialNodes, initialEdges, initialShapes, notes = [] }: Props) {
   const [nodes, setNodes] = useState(initialNodes);
   const [edges, setEdges] = useState(initialEdges);
   const [shapes, setShapes] = useState(initialShapes);
@@ -91,6 +110,11 @@ export default function RoadmapBoard({ initialNodes, initialEdges, initialShapes
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
   const [justCreatedId, setJustCreatedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [spaceHeld, setSpaceHeld] = useState(false); // przytrzymana spacja = chwilowa rączka
+  const [isPanning, setIsPanning] = useState(false); // tylko do kursora "zaciśniętej dłoni"
+  const [fullscreen, setFullscreen] = useState(false);
+  const [focusTitleSignal, setFocusTitleSignal] = useState(0);
+  const [picker, setPicker] = useState<Picker>(null);
   const [isSaving, startTransition] = useTransition();
 
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -99,11 +123,39 @@ export default function RoadmapBoard({ initialNodes, initialEdges, initialShapes
   const selectedNode = selection?.kind === "node" ? nodes.find((n) => n.id === selection.id) : undefined;
   const selectedEdge = selection?.kind === "edge" ? edges.find((e) => e.id === selection.id) : undefined;
   const selectedShape = selection?.kind === "shape" ? shapes.find((s) => s.id === selection.id) : undefined;
-  const connectSource = connectFrom ? nodes.find((n) => n.id === connectFrom) : undefined;
   const doneCount = nodes.filter((n) => n.status === "done").length;
 
-  // Ramki pod spodem, klocki tekstowe nad nimi (w obrębie rodzaju: kolejność tworzenia)
-  const orderedShapes = [...shapes.filter((s) => s.kind === "rect"), ...shapes.filter((s) => s.kind === "text")];
+  // Tryb "rączki": widok można tylko przesuwać, obiekty są nieklikalne
+  const panMode = tool === "hand" || spaceHeld;
+
+  // Prostokąt każdego obiektu po id — strzałki łączą karty i kształty bez rozróżnienia
+  const boxes = new Map<string, Box>([
+    ...nodes.map((n) => [n.id, nodeBox(n)] as const),
+    ...shapes.map((s) => [s.id, { x: s.x, y: s.y, w: s.w, h: s.h }] as const),
+  ]);
+  const connectSource = connectFrom ? boxes.get(connectFrom) : undefined;
+
+  // Podpis obiektu w panelu strzałki: nazwa karty, tekst kształtu albo jego rodzaj
+  function itemLabel(id: string) {
+    const node = nodes.find((n) => n.id === id);
+    if (node) return node.title;
+    const shape = shapes.find((s) => s.id === id);
+    if (!shape) return "?";
+    const text =
+      shape.kind === "note"
+        ? (notesById.get(shape.noteId ?? "")?.title ?? "")
+        : shape.kind === "checklist"
+          ? parseChecklist(shape.text).title
+          : shape.kind === "calendar"
+            ? parseCalendar(shape.text).title
+            : shape.text.trim().split("\n")[0];
+    if (text) return text.length > 30 ? `${text.slice(0, 30)}…` : text;
+    return SHAPE_KIND_LABELS[shape.kind];
+  }
+
+  // Ramki pod spodem, cała reszta nad nimi (w obrębie grupy: kolejność tworzenia)
+  const orderedShapes = [...shapes.filter((s) => s.kind === "rect"), ...shapes.filter((s) => s.kind !== "rect")];
+  const notesById = new Map(notes.map((n) => [n.id, n]));
 
   // ---------- zapis w tle ----------
 
@@ -119,8 +171,11 @@ export default function RoadmapBoard({ initialNodes, initialEdges, initialShapes
   }
 
   function saveShape(shape: RoadmapShape) {
-    const { x, y, w, h, text, color } = shape;
-    persist(() => updateRoadmapShape(shape.id, { x, y, w, h, text, color }));
+    // Wysyłamy cały stan kształtu (bez id i rodzaju — tych nie da się zmienić)
+    const { x, y, w, h, text, color, noteId, fontSize, textColor, bold, italic, align } = shape;
+    persist(() =>
+      updateRoadmapShape(shape.id, { x, y, w, h, text, color, noteId, fontSize, textColor, bold, italic, align }),
+    );
   }
 
   // ---------- współrzędne ----------
@@ -150,17 +205,24 @@ export default function RoadmapBoard({ initialNodes, initialEdges, initialShapes
 
   // ---------- karty (elementy stacku) ----------
 
-  function addNode() {
+  // Lewy górny róg obiektu o rozmiarze w×h tak, by wypadł na środku ekranu.
+  // Lekki rozrzut — żeby kolejne obiekty nie lądowały idealnie na sobie.
+  function centerSpot(w: number, h: number) {
     const rect = viewportRef.current!.getBoundingClientRect();
-    // lekki rozrzut, żeby kolejne karty nie lądowały idealnie na sobie
     const jitter = () => Math.round((Math.random() - 0.5) * 80);
+    return {
+      x: Math.round((rect.width / 2 - view.x) / view.scale - w / 2) + jitter(),
+      y: Math.round((rect.height / 2 - view.y) / view.scale - h / 2) + jitter(),
+    };
+  }
+
+  function addNode() {
     const node: RoadmapNode = {
       id: crypto.randomUUID(),
       title: "Nowy element",
       category: "",
       status: "todo",
-      x: Math.round((rect.width / 2 - view.x) / view.scale - NODE_W / 2) + jitter(),
-      y: Math.round((rect.height / 2 - view.y) / view.scale - NODE_H / 2) + jitter(),
+      ...centerSpot(NODE_W, NODE_H),
     };
     setNodes((ns) => [...ns, node]);
     changeTool("select");
@@ -190,7 +252,33 @@ export default function RoadmapBoard({ initialNodes, initialEdges, initialShapes
   // ---------- kształty ----------
 
   function newShape(kind: ShapeKind, x: number, y: number, w: number, h: number): RoadmapShape {
-    return { id: crypto.randomUUID(), kind, x, y, w, h, text: "", color: kind === "rect" ? "brand" : "amber" };
+    const { color, fontSize } = SHAPE_DEFAULTS[kind];
+    return { id: crypto.randomUUID(), kind, x, y, w, h, text: "", color, noteId: null, ...DEFAULT_TEXT_STYLE, fontSize };
+  }
+
+  // Nowy obiekt z menu "+ Dodaj" — na środku ekranu, od razu zaznaczony
+  function addShape(kind: ShapeKind, noteId: string | null = null) {
+    const { w, h } = SHAPE_DEFAULTS[kind];
+    const { x, y } = centerSpot(w, h);
+    const shape = { ...newShape(kind, x, y, w, h), noteId };
+    setShapes((ss) => [...ss, shape]);
+    changeTool("select");
+    setSelection({ kind: "shape", id: shape.id });
+    // karteczka i kod: od razu można pisać
+    if (kind === "sticky" || kind === "code") setEditingShapeId(shape.id);
+    persist(() => createRoadmapShape(shape));
+  }
+
+  function handleAdd(kind: AddKind) {
+    if (kind === "node") addNode();
+    else if (kind === "note") setPicker({ shapeId: null }); // najpierw wybór notatki
+    else addShape(kind);
+  }
+
+  function pickNote(noteId: string) {
+    if (picker?.shapeId) changeShape(picker.shapeId, { noteId }, true);
+    else addShape("note", noteId);
+    setPicker(null);
   }
 
   // Blok tekstu: od razu zaznaczony i w trybie pisania
@@ -211,9 +299,14 @@ export default function RoadmapBoard({ initialNodes, initialEdges, initialShapes
     if (save) saveShape(next);
   }
 
-  function startEditing(id: string) {
+  // "Edycja" zależy od rodzaju: tekst — pisanie, notatka — wybór innej,
+  // lista zadań i kalendarz — nic (ich pola i dni działają cały czas)
+  function editShape(id: string) {
+    const shape = shapes.find((s) => s.id === id);
+    if (!shape) return;
     setSelection({ kind: "shape", id });
-    setEditingShapeId(id);
+    if (shape.kind === "note") setPicker({ shapeId: id });
+    else if (shape.kind !== "checklist" && shape.kind !== "calendar") setEditingShapeId(id);
   }
 
   // ---------- usuwanie ----------
@@ -230,6 +323,7 @@ export default function RoadmapBoard({ initialNodes, initialEdges, initialShapes
       persist(() => deleteRoadmapEdge(id));
     } else {
       setShapes((ss) => ss.filter((s) => s.id !== id));
+      setEdges((es) => es.filter((e) => e.sourceId !== id && e.targetId !== id));
       persist(() => deleteRoadmapShape(id));
     }
     setSelection(null);
@@ -282,10 +376,34 @@ export default function RoadmapBoard({ initialNodes, initialEdges, initialShapes
 
   // ---------- zdarzenia wskaźnika ----------
 
+  // Przesuwanie widoku — wspólne dla pustego tła, rączki, spacji i środkowego przycisku
+  function startPan(e: ReactPointerEvent<HTMLDivElement>) {
+    e.currentTarget.setPointerCapture(e.pointerId);
+    interaction.current = {
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      kind: "pan",
+      origX: view.x,
+      origY: view.y,
+    };
+    setIsPanning(true);
+  }
+
   function handlePointerDown(e: ReactPointerEvent<HTMLDivElement>) {
-    if (e.button !== 0) return; // tylko lewy przycisk / dotyk
+    const middle = e.button === 1;
+    if (e.button !== 0 && !middle) return; // lewy przycisk / dotyk, środkowy = przesuwanie
     const target = e.target as Element;
-    if (target.closest("input, textarea")) return; // klik w pole tekstowe = zwykła edycja
+    // klik w pole, przycisk albo link wewnątrz obiektu (np. lista zadań, kafelek notatki) = zwykłe działanie
+    if (!middle && target.closest("input, textarea, button, a")) return;
+
+    // Rączka (narzędzie H, przytrzymana spacja albo środkowy przycisk):
+    // zawsze przesuwamy widok — nie zaznaczamy i nie ruszamy obiektów
+    if (panMode || middle) {
+      e.preventDefault();
+      startPan(e);
+      return;
+    }
 
     const nodeId = target.closest<HTMLElement>("[data-node-id]")?.dataset.nodeId;
     const edgeId = target.closest<SVGElement>("[data-edge-id]")?.dataset.edgeId;
@@ -293,16 +411,17 @@ export default function RoadmapBoard({ initialNodes, initialEdges, initialShapes
     const resizeId = target.closest<HTMLElement>("[data-resize-id]")?.dataset.resizeId;
     const drag: Drag = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY };
 
-    // --- narzędzie: łączenie (tylko między kartami stacku) ---
+    // --- narzędzie: łączenie — dowolne obiekty: karty, prostokąty, bloki tekstu ---
     if (tool === "connect") {
-      if (!nodeId) {
+      const itemId = nodeId ?? resizeId ?? shapeId;
+      if (!itemId) {
         setConnectFrom(null);
         setCursor(null);
-      } else if (!connectFrom || connectFrom === nodeId) {
-        setConnectFrom(connectFrom === nodeId ? null : nodeId);
+      } else if (!connectFrom || connectFrom === itemId) {
+        setConnectFrom(connectFrom === itemId ? null : itemId);
         setCursor(toWorld(e.clientX, e.clientY));
       } else {
-        connect(connectFrom, nodeId);
+        connect(connectFrom, itemId);
         setConnectFrom(null);
         setCursor(null);
       }
@@ -348,14 +467,14 @@ export default function RoadmapBoard({ initialNodes, initialEdges, initialShapes
       setSelection({ kind: target, id: item.id });
       setJustCreatedId(null); // autofocus nazwy tylko zaraz po utworzeniu karty
     } else {
-      interaction.current = { ...drag, kind: "pan", origX: view.x, origY: view.y };
+      startPan(e);
       setSelection(null);
     }
   }
 
   // Wylicza nowy stan przeciąganego obiektu — używane w trakcie ruchu i na końcu
-  type Box = { x?: number; y?: number; w?: number; h?: number };
-  function applyDrag(it: NonNullable<Interaction>, clientX: number, clientY: number): Box | null {
+  type DragResult = { x?: number; y?: number; w?: number; h?: number };
+  function applyDrag(it: NonNullable<Interaction>, clientX: number, clientY: number): DragResult | null {
     const { dx, dy } = worldDelta(it, clientX, clientY);
 
     if (it.kind === "move") {
@@ -410,7 +529,10 @@ export default function RoadmapBoard({ initialNodes, initialEdges, initialShapes
     const it = interaction.current;
     if (!it || it.pointerId !== e.pointerId) return;
     interaction.current = null;
-    if (it.kind === "pan") return;
+    if (it.kind === "pan") {
+      setIsPanning(false);
+      return;
+    }
     if ((it.kind === "move" || it.kind === "resize") && !it.moved) return;
 
     // Do bazy zapisujemy tylko stan końcowy, nie każdy piksel ruchu
@@ -427,7 +549,7 @@ export default function RoadmapBoard({ initialNodes, initialEdges, initialShapes
     if (it.kind === "draw") {
       // Samo kliknięcie (bez przeciągnięcia) = prostokąt w domyślnym rozmiarze
       const tooSmall = (result.w ?? 0) < SHAPE_MIN.rect.w || (result.h ?? 0) < SHAPE_MIN.rect.h;
-      const final = { ...shape, ...result, ...(tooSmall ? { w: 280, h: 180 } : {}) };
+      const final = { ...shape, ...result, ...(tooSmall ? { w: SHAPE_DEFAULTS.rect.w, h: SHAPE_DEFAULTS.rect.h } : {}) };
       setShapes((ss) => ss.map((s) => (s.id === final.id ? final : s)));
       setTool("select");
       setSelection({ kind: "shape", id: final.id });
@@ -437,14 +559,19 @@ export default function RoadmapBoard({ initialNodes, initialEdges, initialShapes
     saveShape({ ...shape, ...result });
   }
 
-  // Dwuklik: na kształcie — edycja tekstu, na pustym tle — nowy blok tekstu
+  // Dwuklik: na karcie — edycja nazwy w panelu, na kształcie — edycja tekstu,
+  // na pustym tle — nowa notatka (blok tekstu)
   function handleDoubleClick(e: ReactMouseEvent<HTMLDivElement>) {
-    if (tool !== "select") return;
+    if (tool !== "select" || panMode) return;
     const target = e.target as Element;
-    if (target.closest("input, textarea, [data-node-id], [data-edge-id]")) return;
+    if (target.closest("input, textarea, button, a, [data-edge-id]")) return;
+    const nodeId = target.closest<HTMLElement>("[data-node-id]")?.dataset.nodeId;
     const shapeId = target.closest<HTMLElement>("[data-shape-id]")?.dataset.shapeId;
-    if (shapeId) {
-      startEditing(shapeId);
+    if (nodeId) {
+      setSelection({ kind: "node", id: nodeId });
+      setFocusTitleSignal((n) => n + 1);
+    } else if (shapeId) {
+      editShape(shapeId);
     } else {
       const p = toWorld(e.clientX, e.clientY);
       addTextBlock(p.x, p.y);
@@ -460,18 +587,36 @@ export default function RoadmapBoard({ initialNodes, initialEdges, initialShapes
     const typing = el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement;
     if (typing || e.ctrlKey || e.metaKey || e.altKey) return; // pisanie w polu ma pierwszeństwo
 
+    // Otwarte okno wyboru notatki: skróty tablicy nie działają, Esc je zamyka
+    if (picker) {
+      if (e.key === "Escape") setPicker(null);
+      return;
+    }
+
+    // Spacja: rączka, dopóki klawisz jest wciśnięty. preventDefault — żeby strona
+    // się nie przewijała, a przycisk z fokusem (np. w toolbarze) się nie "kliknął".
+    if (e.code === "Space") {
+      e.preventDefault();
+      if (!e.repeat) setSpaceHeld(true);
+      return;
+    }
+
     const key = e.key.toLowerCase();
     if (e.key === "Delete" || e.key === "Backspace") {
       e.preventDefault();
       deleteSelected();
     } else if (e.key === "Escape") {
+      // Esc najpierw kończy narzędzie / zaznaczenie, a gdy nie ma czego kończyć — pełny ekran
+      if (tool === "select" && !selection && fullscreen) setFullscreen(false);
       changeTool("select");
       setSelection(null);
     } else if (e.key === "Enter" && selection?.kind === "shape") {
       e.preventDefault();
-      startEditing(selection.id);
+      editShape(selection.id);
     } else if (key === "n") addNode();
     else if (key === "v") changeTool("select");
+    else if (key === "h") changeTool("hand");
+    else if (key === "f") setFullscreen((f) => !f);
     else if (key === "r") changeTool("rect");
     else if (key === "t") changeTool("text");
     else if (key === "c") changeTool("connect");
@@ -479,9 +624,35 @@ export default function RoadmapBoard({ initialNodes, initialEdges, initialShapes
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => onKeyDown(e);
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.code !== "Space") return;
+      setSpaceHeld((held) => {
+        if (held) e.preventDefault(); // puszczenie spacji nie "klika" przycisku z fokusem
+        return false;
+      });
+    };
+    // Przełączenie karty / okna ze wciśniętą spacją — keyup by do nas nie dotarł
+    const release = () => setSpaceHeld(false);
     window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", release);
+    return () => {
+      window.removeEventListener("keydown", handler);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", release);
+    };
   }, []);
+
+  // Pełny ekran: tablica przykrywa navbar i stopkę (position: fixed),
+  // a strona pod spodem nie może się przewijać
+  useEffect(() => {
+    if (!fullscreen) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previous;
+    };
+  }, [fullscreen]);
 
   const zoomAtEvent = useEffectEvent(zoomAt);
 
@@ -504,8 +675,22 @@ export default function RoadmapBoard({ initialNodes, initialEdges, initialShapes
 
   const hint = tool === "connect" && connectFrom ? "Teraz kliknij element docelowy" : TOOL_HINTS[tool];
 
+  const cursorClass = panMode
+    ? isPanning
+      ? "cursor-grabbing"
+      : "cursor-grab"
+    : tool === "select"
+      ? "cursor-grab active:cursor-grabbing"
+      : tool === "text"
+        ? "cursor-text"
+        : "cursor-crosshair";
+
   return (
-    <div className="absolute inset-0 overflow-hidden bg-[#f7fbfb] dark:bg-[#0c1414]">
+    <div
+      className={`overflow-hidden bg-[#f7fbfb] dark:bg-[#0c1414] ${
+        fullscreen ? "fixed inset-0 z-50" : "absolute inset-0"
+      }`}
+    >
       {/* Viewport — tu trafiają wszystkie zdarzenia wskaźnika */}
       <div
         ref={viewportRef}
@@ -516,9 +701,9 @@ export default function RoadmapBoard({ initialNodes, initialEdges, initialShapes
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
         onDoubleClick={handleDoubleClick}
-        className={`absolute inset-0 touch-none text-ink/15 dark:text-white/10 ${
-          tool === "select" ? "cursor-grab active:cursor-grabbing" : tool === "text" ? "cursor-text" : "cursor-crosshair"
-        }`}
+        // Środkowy przycisk w Windows włącza "autoprzewijanie" — blokujemy je
+        onMouseDown={(e) => e.button === 1 && e.preventDefault()}
+        className={`absolute inset-0 touch-none text-ink/15 dark:text-white/10 ${cursorClass}`}
         style={{
           // Kropkowana siatka przesuwa się i skaluje razem z widokiem
           backgroundImage: "radial-gradient(currentColor 1.2px, transparent 1.2px)",
@@ -535,8 +720,10 @@ export default function RoadmapBoard({ initialNodes, initialEdges, initialShapes
             <ShapeView
               key={shape.id}
               shape={shape}
-              selected={selectedShape?.id === shape.id}
+              selected={selectedShape?.id === shape.id || connectFrom === shape.id}
               editing={editingShapeId === shape.id}
+              note={shape.noteId ? notesById.get(shape.noteId) : undefined}
+              onContentChange={(text, save) => changeShape(shape.id, { text }, save)}
               onTextChange={(text) => changeShape(shape.id, { text }, false)}
               onTextCommit={() => {
                 saveShape(shape);
@@ -545,7 +732,7 @@ export default function RoadmapBoard({ initialNodes, initialEdges, initialShapes
             />
           ))}
           <EdgesLayer
-            nodes={nodes}
+            boxes={boxes}
             edges={edges}
             selectedEdgeId={selectedEdge?.id ?? null}
             preview={connectSource && cursor ? { from: connectSource, to: cursor } : null}
@@ -560,15 +747,21 @@ export default function RoadmapBoard({ initialNodes, initialEdges, initialShapes
             />
           ))}
         </div>
+
+        {/* Rączka: przezroczysta warstwa NAD obiektami — kliknięcia trafiają w nią,
+            więc żadnej karty ani kształtu nie da się złapać, a kursor to zawsze dłoń */}
+        {panMode && <div data-pan-layer aria-hidden className="absolute inset-0" />}
       </div>
 
       <Toolbar
         tool={tool}
         scale={view.scale}
         onTool={changeTool}
-        onAddNode={addNode}
+        onAdd={handleAdd}
         onZoom={zoomFromCenter}
         onFit={fitToContent}
+        fullscreen={fullscreen}
+        onFullscreen={() => setFullscreen((f) => !f)}
       />
 
       {/* Postęp + status zapisu */}
@@ -592,8 +785,8 @@ export default function RoadmapBoard({ initialNodes, initialEdges, initialShapes
           <div className="pointer-events-auto flex max-w-sm flex-col items-center gap-3 rounded-2xl border-2 border-dashed border-brand bg-white/90 p-8 text-center dark:bg-[#0f1f1e]/90">
             <p className="text-lg text-ink dark:text-white">Zacznij układać swój stack ☁️</p>
             <p className="text-sm text-ink/60 dark:text-white/60">
-              Dodaj technologię, obrysuj grupę prostokątem (R), dopisz notatkę blokiem tekstu (T) i połącz elementy
-              strzałkami (C).
+              Dodaj technologię, obrysuj grupę prostokątem (R), dopisz notatkę blokiem tekstu (T lub dwuklik) i połącz
+              dowolne obiekty strzałkami (C). Spacja + przeciąganie przesuwa widok.
             </p>
             <button
               type="button"
@@ -612,18 +805,21 @@ export default function RoadmapBoard({ initialNodes, initialEdges, initialShapes
           key={selectedNode.id}
           node={selectedNode}
           autoFocusTitle={selectedNode.id === justCreatedId}
+          focusTitleSignal={focusTitleSignal}
           onChange={(patch, save) => changeNode(selectedNode.id, patch, save)}
           onDelete={deleteSelected}
           onClose={() => setSelection(null)}
         />
       )}
 
-      {selectedShape && editingShapeId !== selectedShape.id && (
+      {selectedShape && (
         <ShapePanel
           key={selectedShape.id}
           shape={selectedShape}
+          editing={editingShapeId === selectedShape.id}
           onColor={(color) => changeShape(selectedShape.id, { color }, true)}
-          onEdit={() => startEditing(selectedShape.id)}
+          onStyle={(patch) => changeShape(selectedShape.id, patch, true)}
+          onEdit={() => editShape(selectedShape.id)}
           onDelete={deleteSelected}
           onClose={() => setSelection(null)}
         />
@@ -632,9 +828,9 @@ export default function RoadmapBoard({ initialNodes, initialEdges, initialShapes
       {selectedEdge && (
         <div className="absolute top-4 right-4 z-20 flex w-72 max-w-[calc(100%-2rem)] flex-col gap-3 rounded-2xl border border-line bg-white p-4 shadow-lg dark:border-white/10 dark:bg-[#0f1f1e]">
           <p className="text-sm text-ink dark:text-white">
-            <span className="font-semibold">{nodes.find((n) => n.id === selectedEdge.sourceId)?.title}</span>
+            <span className="font-semibold">{itemLabel(selectedEdge.sourceId)}</span>
             {" → "}
-            <span className="font-semibold">{nodes.find((n) => n.id === selectedEdge.targetId)?.title}</span>
+            <span className="font-semibold">{itemLabel(selectedEdge.targetId)}</span>
           </p>
           <button
             type="button"
@@ -644,6 +840,15 @@ export default function RoadmapBoard({ initialNodes, initialEdges, initialShapes
             Usuń połączenie
           </button>
         </div>
+      )}
+
+      {picker && (
+        <NotePicker
+          notes={notes}
+          currentId={picker.shapeId ? (shapes.find((s) => s.id === picker.shapeId)?.noteId ?? null) : null}
+          onPick={pickNote}
+          onClose={() => setPicker(null)}
+        />
       )}
 
       {/* Błąd zapisu */}

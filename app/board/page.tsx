@@ -3,6 +3,8 @@ import { redirect } from "next/navigation";
 import RoadmapBoard from "../components/roadmap/roadmap-board";
 import { getCurrentUser } from "../lib/session";
 import { getRoadmapForUser } from "../lib/roadmap";
+import { getNotesForUser } from "../lib/notes";
+import { toBoardNote } from "../lib/board-notes";
 
 export const metadata: Metadata = { title: "Board | Cloudy Notes" };
 
@@ -13,7 +15,11 @@ export default async function BoardPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/logowanie");
 
-  const { nodes, edges, shapes } = await getRoadmapForUser(user.id);
+  // Tablica i notatki (do kafelków "Notatka z Cloudy Notes") — równolegle
+  const [{ nodes, edges, shapes }, notes] = await Promise.all([
+    getRoadmapForUser(user.id),
+    getNotesForUser(user.id),
+  ]);
 
   return (
     // 4rem = wysokość navbaru, tablica zajmuje resztę ekranu
@@ -25,7 +31,12 @@ export default async function BoardPage() {
         </p>
       </div>
       <div className="relative min-h-0 flex-1 border-t border-line dark:border-white/10">
-        <RoadmapBoard initialNodes={nodes} initialEdges={edges} initialShapes={shapes} />
+        <RoadmapBoard
+          initialNodes={nodes}
+          initialEdges={edges}
+          initialShapes={shapes}
+          notes={notes.map(toBoardNote)}
+        />
       </div>
     </div>
   );

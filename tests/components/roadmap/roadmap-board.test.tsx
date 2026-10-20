@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { RoadmapEdge, RoadmapNode, RoadmapShape } from "@/app/lib/roadmap-types";
+import type { BoardNote, RoadmapEdge, RoadmapNode, RoadmapShape } from "@/app/lib/roadmap-types";
 import { makeEdge, makeNode, makeShape } from "../../helpers/fixtures";
 
 // Test integracyjny całej tablicy: prawdziwe komponenty, prawdziwy stan Reacta,
@@ -25,10 +25,17 @@ beforeEach(() => {
   for (const action of Object.values(actions)) action.mockResolvedValue({ ok: true });
 });
 
-function setup(data: { nodes?: RoadmapNode[]; edges?: RoadmapEdge[]; shapes?: RoadmapShape[] } = {}) {
+function setup(
+  data: { nodes?: RoadmapNode[]; edges?: RoadmapEdge[]; shapes?: RoadmapShape[]; notes?: BoardNote[] } = {},
+) {
   const user = userEvent.setup();
   const utils = render(
-    <RoadmapBoard initialNodes={data.nodes ?? []} initialEdges={data.edges ?? []} initialShapes={data.shapes ?? []} />,
+    <RoadmapBoard
+      initialNodes={data.nodes ?? []}
+      initialEdges={data.edges ?? []}
+      initialShapes={data.shapes ?? []}
+      notes={data.notes}
+    />,
   );
   const board = screen.getByRole("application", { name: "Tablica Board" });
   const card = (id: string) => utils.container.querySelector<HTMLElement>(`[data-node-id='${id}']`);
@@ -48,12 +55,18 @@ function drag(start: Element, board: Element, from: [number, number], to: [numbe
 }
 const click = (el: Element, x = 0, y = 0) => drag(el, el, [x, y], [x, y]);
 
+// Wybór pozycji z menu "+ Dodaj"
+async function addFromMenu(user: ReturnType<typeof userEvent.setup>, name: RegExp) {
+  await user.click(screen.getByRole("button", { name: "+ Dodaj" }));
+  await user.click(screen.getByRole("menuitem", { name }));
+}
+
 describe("karty stacku", () => {
-  it("+ Element dodaje kartę, otwiera panel i zapisuje ją w bazie", async () => {
+  it("+ Dodaj → Element stacku dodaje kartę, otwiera panel i zapisuje ją w bazie", async () => {
     const { user } = setup();
     expect(screen.getByText("Zacznij układać swój stack ☁️")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "+ Element" }));
+    await addFromMenu(user, /Element stacku/);
 
     expect(screen.getByText("Nowy element", { selector: "p" })).toBeInTheDocument();
     expect(screen.queryByText("Zacznij układać swój stack ☁️")).not.toBeInTheDocument();
@@ -174,6 +187,252 @@ describe("łączenie strzałkami", () => {
   });
 });
 
+describe("strzałki między dowolnymi obiektami", () => {
+  it("łączy kartę z blokiem tekstu i ramkę z kartą", async () => {
+    const { user, card, shapeEl, container } = setup({
+      nodes: [makeNode()],
+      shapes: [makeShape({ x: 500, y: 0 }), makeShape({ id: "shape-2", kind: "rect", x: 0, y: 400, w: 300, h: 200 })],
+    });
+    await user.keyboard("c");
+    click(card("node-1")!);
+    click(shapeEl("shape-1")!, 600, 50);
+    expect(actions.createRoadmapEdge).toHaveBeenLastCalledWith({ id: expect.any(String), sourceId: "node-1", targetId: "shape-1" });
+
+    click(shapeEl("shape-2")!, 100, 500);
+    expect(shapeEl("shape-2")).toHaveClass("ring-4"); // źródło podświetlone
+    click(card("node-1")!);
+    expect(actions.createRoadmapEdge).toHaveBeenLastCalledWith({ id: expect.any(String), sourceId: "shape-2", targetId: "node-1" });
+    expect(container.querySelectorAll("[data-edge-id]")).toHaveLength(2);
+  });
+
+  it("panel strzałki podpisuje kształty ich tekstem albo rodzajem", () => {
+    const { container } = setup({
+      nodes: [makeNode()],
+      shapes: [makeShape({ id: "shape-2", kind: "rect", x: 400 })],
+      edges: [makeEdge({ targetId: "shape-2" })],
+    });
+    click(container.querySelector("[data-edge-id='edge-1']")!);
+    expect(screen.getByText("→", { exact: false })).toHaveTextContent("React → Prostokąt");
+  });
+
+  it("usunięcie kształtu usuwa też jego strzałki", async () => {
+    const { user, shapeEl, container } = setup({
+      nodes: [makeNode()],
+      shapes: [makeShape({ id: "shape-2", x: 400, text: "Notatka" })],
+      edges: [makeEdge({ targetId: "shape-2" })],
+    });
+    expect(container.querySelector("[data-edge-id]")).toBeTruthy();
+    click(shapeEl("shape-2")!, 450, 50);
+    await user.keyboard("{Delete}");
+    expect(container.querySelector("[data-edge-id]")).toBeNull();
+    expect(actions.deleteRoadmapShape).toHaveBeenCalledWith("shape-2");
+  });
+});
+
+describe("rączka (spacja / H / środkowy przycisk)", () => {
+  it("przytrzymana spacja: przeciąganie po karcie przesuwa WIDOK, karta stoi", async () => {
+    const { user, board, card, container } = setup({ nodes: [makeNode()] });
+    await user.keyboard("[Space>]"); // wciśnij i trzymaj
+    expect(container.querySelector("[data-pan-layer]")).toBeTruthy();
+
+    // z warstwą rączki klik trafia w nią, a nie w kartę
+    drag(container.querySelector("[data-pan-layer]")!, board, [150, 150], [250, 200]);
+    expect(card("node-1")!.style.left).toBe("100px");
+    expect((board.firstElementChild as HTMLElement).style.transform).toBe("translate(140px, 90px) scale(1)");
+    expect(actions.moveRoadmapNode).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText("Nazwa")).not.toBeInTheDocument(); // nic się nie zaznaczyło
+
+    await user.keyboard("[/Space]"); // puść
+    expect(container.querySelector("[data-pan-layer]")).toBeNull();
+  });
+
+  it("nawet bez warstwy (zdarzenie prosto z karty) spacja nie rusza obiektu", async () => {
+    const { user, board, card } = setup({ nodes: [makeNode()] });
+    await user.keyboard("[Space>]");
+    drag(card("node-1")!, board, [150, 150], [250, 200]);
+    expect(card("node-1")!.style.left).toBe("100px");
+    await user.keyboard("[/Space]");
+  });
+
+  it("spacja w polu tekstowym to zwykła spacja, nie rączka", async () => {
+    const { user, card, container } = setup({ nodes: [makeNode()] });
+    click(card("node-1")!);
+    await user.click(screen.getByLabelText("Nazwa"));
+    await user.keyboard(" JS");
+    expect(screen.getByLabelText("Nazwa")).toHaveValue("React JS");
+    expect(container.querySelector("[data-pan-layer]")).toBeNull();
+  });
+
+  it("narzędzie Rączka (H) działa do zmiany narzędzia", async () => {
+    const { user, container } = setup();
+    await user.keyboard("h");
+    expect(screen.getByRole("radio", { name: "Rączka" })).toBeChecked();
+    expect(container.querySelector("[data-pan-layer]")).toBeTruthy();
+    expect(screen.getByText(/Przeciągaj, aby przesuwać widok/)).toBeInTheDocument();
+    await user.keyboard("v");
+    expect(container.querySelector("[data-pan-layer]")).toBeNull();
+  });
+
+  it("środkowy przycisk myszy przesuwa widok z dowolnego miejsca", () => {
+    const { board, card } = setup({ nodes: [makeNode()] });
+    const opts = { pointerId: 1, button: 1 };
+    fireEvent.pointerDown(card("node-1")!, { ...opts, clientX: 150, clientY: 150 });
+    fireEvent.pointerMove(board, { ...opts, clientX: 160, clientY: 170 });
+    fireEvent.pointerUp(board, { ...opts, clientX: 160, clientY: 170 });
+    expect(card("node-1")!.style.left).toBe("100px");
+    expect((board.firstElementChild as HTMLElement).style.transform).toBe("translate(50px, 60px) scale(1)");
+  });
+
+  it("dwuklik w trybie rączki nie dodaje notatki", async () => {
+    const { user, board } = setup();
+    await user.keyboard("h");
+    fireEvent.doubleClick(board, { clientX: 240, clientY: 140 });
+    expect(actions.createRoadmapShape).not.toHaveBeenCalled();
+  });
+});
+
+describe("pełny ekran", () => {
+  it("przycisk i klawisz F przełączają tryb, Esc z niego wychodzi", async () => {
+    const { user, board } = setup();
+    const root = board.parentElement!;
+    expect(root).toHaveClass("absolute");
+
+    await user.click(screen.getByRole("button", { name: "Pełny ekran" }));
+    expect(root).toHaveClass("fixed", "inset-0", "z-50");
+    expect(document.body.style.overflow).toBe("hidden");
+
+    await user.keyboard("{Escape}");
+    expect(root).toHaveClass("absolute");
+    expect(document.body.style.overflow).toBe("");
+
+    await user.keyboard("f");
+    expect(root).toHaveClass("fixed");
+    await user.keyboard("f");
+    expect(root).not.toHaveClass("fixed");
+  });
+
+  it("Esc najpierw kończy narzędzie, dopiero drugi wychodzi z pełnego ekranu", async () => {
+    const { user, board } = setup();
+    const root = board.parentElement!;
+    await user.keyboard("f");
+    await user.keyboard("r");
+    await user.keyboard("{Escape}");
+    expect(root).toHaveClass("fixed");
+    expect(screen.getByRole("radio", { name: "Zaznacz" })).toBeChecked();
+    await user.keyboard("{Escape}");
+    expect(root).not.toHaveClass("fixed");
+  });
+});
+
+describe("nowe obiekty z menu + Dodaj", () => {
+  it("Karteczka: żółta, większy tekst, od razu w trybie pisania", async () => {
+    const { user } = setup();
+    await addFromMenu(user, /Karteczka/);
+    expect(actions.createRoadmapShape).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "sticky", color: "amber", fontSize: 18, w: 200, h: 200, noteId: null }),
+    );
+    expect(screen.getByRole("heading", { name: "Karteczka" })).toBeInTheDocument();
+    await vi.waitFor(() => expect(screen.getByPlaceholderText("Wpisz tekst…")).toHaveFocus());
+  });
+
+  it("Blok kodu: pisanie i zapis treści", async () => {
+    const { user } = setup();
+    await addFromMenu(user, /Blok kodu/);
+    expect(actions.createRoadmapShape).toHaveBeenCalledWith(expect.objectContaining({ kind: "code", fontSize: 13 }));
+    const textarea = screen.getByPlaceholderText("// wklej albo wpisz kod");
+    await vi.waitFor(() => expect(textarea).toHaveFocus());
+    await user.keyboard("npm i{Escape}");
+    expect(actions.updateRoadmapShape).toHaveBeenLastCalledWith(expect.any(String), expect.objectContaining({ text: "npm i" }));
+  });
+
+  it("Lista zadań: dodawanie i odhaczanie punktów zapisuje Markdown", async () => {
+    const { user, container } = setup();
+    await addFromMenu(user, /Lista zadań/);
+    expect(actions.createRoadmapShape).toHaveBeenCalledWith(expect.objectContaining({ kind: "checklist", text: "" }));
+
+    await user.type(screen.getByLabelText("Nowy punkt"), "Hooki{Enter}");
+    expect(actions.updateRoadmapShape).toHaveBeenLastCalledWith(expect.any(String), expect.objectContaining({ text: "- [ ] Hooki" }));
+
+    await user.click(screen.getByRole("checkbox", { name: "Zrobione: Hooki" }));
+    expect(actions.updateRoadmapShape).toHaveBeenLastCalledWith(expect.any(String), expect.objectContaining({ text: "- [x] Hooki" }));
+    expect(container.querySelector("[data-shape-id]")).toHaveTextContent("1/1");
+  });
+
+  it("Kalendarz: klik w dzień stawia X i zapisuje datę; przeciągnięcie po dniu nie rusza kafelka", async () => {
+    const { user, board, container } = setup();
+    await addFromMenu(user, /Kalendarz/);
+    expect(actions.createRoadmapShape).toHaveBeenCalledWith(expect.objectContaining({ kind: "calendar", text: "" }));
+
+    const today = new Date();
+    const iso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    const day = await screen.findByRole("button", { name: `${today.getDate()} — niezaznaczony` });
+    drag(day, board, [10, 10], [300, 300]);
+    expect(actions.updateRoadmapShape).not.toHaveBeenCalled();
+
+    await user.click(day);
+    expect(actions.updateRoadmapShape).toHaveBeenLastCalledWith(expect.any(String), expect.objectContaining({ text: iso }));
+    expect(container.querySelector("[data-shape-id] svg path[d='M4 4l12 12M16 4L4 16']")).toBeTruthy();
+  });
+
+  it("klik w punkt listy nie przesuwa kafelka (pola działają normalnie)", () => {
+    const { board } = setup({ shapes: [makeShape({ kind: "checklist", text: "- [ ] A" })] });
+    drag(screen.getByLabelText("Punkt 1"), board, [20, 60], [200, 200]);
+    expect(actions.updateRoadmapShape).not.toHaveBeenCalled();
+  });
+
+  describe("Notatka z Cloudy Notes", () => {
+    const notes: BoardNote[] = [
+      { id: "n1", title: "Hooki w React", excerpt: "useState, useEffect", color: "purple" },
+      { id: "n2", title: "Zakupy", excerpt: "mleko", color: "yellow" },
+    ];
+
+    it("wybór notatki z wyszukiwarki tworzy kafelek z linkiem", async () => {
+      const { user, container } = setup({ notes });
+      await addFromMenu(user, /Notatka z Cloudy Notes/);
+      const dialog = screen.getByRole("dialog", { name: "Wybierz notatkę" });
+      expect(within(dialog).getByLabelText("Szukaj notatki")).toHaveFocus();
+
+      await user.keyboard("hook");
+      expect(within(dialog).queryByText("Zakupy")).not.toBeInTheDocument();
+      await user.click(within(dialog).getByRole("button", { name: /Hooki w React/ }));
+
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(actions.createRoadmapShape).toHaveBeenCalledWith(expect.objectContaining({ kind: "note", noteId: "n1" }));
+      const tile = container.querySelector("[data-shape-id]")!;
+      expect(tile).toHaveTextContent("Hooki w React");
+      expect(within(tile as HTMLElement).getByRole("link")).toHaveAttribute("href", "/notatki/n1");
+    });
+
+    it("dwuklik na kafelku pozwala podmienić notatkę", async () => {
+      const { user, shapeEl } = setup({ notes, shapes: [makeShape({ kind: "note", noteId: "n1" })] });
+      fireEvent.doubleClick(shapeEl("shape-1")!);
+      await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: /Zakupy/ }));
+      expect(actions.updateRoadmapShape).toHaveBeenCalledWith("shape-1", expect.objectContaining({ noteId: "n2" }));
+      expect(shapeEl("shape-1")).toHaveTextContent("Zakupy");
+    });
+
+    it("Esc zamyka okno bez tworzenia kafelka; bez notatek jest link do nowej", async () => {
+      const { user } = setup();
+      await addFromMenu(user, /Notatka z Cloudy Notes/);
+      expect(screen.getByRole("link", { name: "Utwórz pierwszą" })).toHaveAttribute("href", "/notatki/nowa");
+      await user.keyboard("{Escape}");
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(actions.createRoadmapShape).not.toHaveBeenCalled();
+    });
+
+    it("strzałka do kafelka podpisuje go tytułem notatki", () => {
+      const { container } = setup({
+        notes,
+        nodes: [makeNode()],
+        shapes: [makeShape({ kind: "note", noteId: "n1", x: 400 })],
+        edges: [makeEdge({ targetId: "shape-1" })],
+      });
+      click(container.querySelector("[data-edge-id='edge-1']")!);
+      expect(screen.getByText("→", { exact: false, selector: "p" })).toHaveTextContent("React → Hooki w React");
+    });
+  });
+});
+
 describe("prostokąty", () => {
   it("R + przeciągnięcie rysuje prostokąt (w dowolną stronę) i zapisuje go", async () => {
     const { user, board } = setup();
@@ -213,8 +472,22 @@ describe("prostokąty", () => {
     const { board, shapeEl } = setup({ shapes: [makeShape({ text: "Abc" })] });
     drag(shapeEl("shape-1")!, board, [50, 50], [150, 80]);
     expect(actions.updateRoadmapShape).toHaveBeenCalledWith("shape-1", {
-      x: 100, y: 30, w: 220, h: 120, text: "Abc", color: "amber",
+      x: 100, y: 30, w: 220, h: 120, text: "Abc", color: "amber", noteId: null,
+      fontSize: 14, textColor: "ink", bold: false, italic: false, align: "left",
     });
+  });
+
+  it("zmiana stylu tekstu w panelu zmienia wygląd i zapisuje się od razu", async () => {
+    const { user, shapeEl } = setup({ shapes: [makeShape({ text: "Notatka" })] });
+    click(shapeEl("shape-1")!, 10, 10);
+    await user.click(screen.getByRole("button", { name: "Rozmiar 24" }));
+    await user.click(screen.getByRole("button", { name: "Pogrubienie" }));
+    expect(screen.getByText("Notatka").style.fontSize).toBe("24px");
+    expect(screen.getByText("Notatka")).toHaveClass("font-bold");
+    expect(actions.updateRoadmapShape).toHaveBeenLastCalledWith(
+      "shape-1",
+      expect.objectContaining({ fontSize: 24, bold: true, text: "Notatka" }),
+    );
   });
 
   it("zmiana koloru w panelu zapisuje się od razu", async () => {
@@ -246,6 +519,20 @@ describe("bloki tekstu", () => {
     const { board } = setup();
     fireEvent.doubleClick(board, { clientX: 240, clientY: 140 });
     expect(actions.createRoadmapShape).toHaveBeenCalledWith(expect.objectContaining({ kind: "text", x: 200, y: 100 }));
+  });
+
+  it("dwuklik na karcie otwiera jej panel z kursorem w nazwie", async () => {
+    const { card } = setup({ nodes: [makeNode()] });
+    fireEvent.doubleClick(card("node-1")!);
+    const input = await screen.findByLabelText("Nazwa");
+    await vi.waitFor(() => expect(input).toHaveFocus());
+  });
+
+  it("panel stylu jest dostępny także w trakcie pisania", async () => {
+    const { shapeEl } = setup({ shapes: [makeShape({ text: "abc" })] });
+    fireEvent.doubleClick(shapeEl("shape-1")!);
+    expect(await screen.findByDisplayValue("abc")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Pogrubienie" })).toBeInTheDocument();
   });
 
   it("dwuklik na bloku włącza edycję jego tekstu", async () => {
@@ -309,7 +596,7 @@ describe("widok i błędy", () => {
   it("nieudany zapis pokazuje komunikat, który można zamknąć", async () => {
     actions.createRoadmapNode.mockResolvedValue({ ok: false, message: "Sesja wygasła — zaloguj się ponownie." });
     const { user } = setup();
-    await user.click(screen.getByRole("button", { name: "+ Element" }));
+    await addFromMenu(user, /Element stacku/);
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("Sesja wygasła");
     await user.click(within(alert).getByRole("button", { name: "Zamknij" }));

@@ -1,6 +1,13 @@
 import * as z from "zod";
 import { NOTE_COLOR_KEYS } from "./note-colors";
-import { ROADMAP_STATUS_KEYS, SHAPE_COLOR_KEYS, SHAPE_KINDS } from "./roadmap-types";
+import {
+  FONT_SIZE_RANGE,
+  ROADMAP_STATUS_KEYS,
+  SHAPE_COLOR_KEYS,
+  SHAPE_KINDS,
+  TEXT_ALIGNS,
+  TEXT_COLOR_KEYS,
+} from "./roadmap-types";
 
 // ─────────────────────────────────────────────────────────────
 // Schematy Zoda — jedno miejsce, które opisuje, jak wyglądają
@@ -160,6 +167,14 @@ export const RoadmapShapeSchema = z.object({
   h: shapeSize,
   text: z.string().max(2_000, { error: "Tekst może mieć maksymalnie 2000 znaków." }),
   color: z.enum(SHAPE_COLOR_KEYS),
+  // Notatka pokazana na kafelku (tylko rodzaj "note"); null = brak
+  noteId: z.uuid().nullable(),
+  // Styl tekstu
+  fontSize: z.number().int().min(FONT_SIZE_RANGE.min).max(FONT_SIZE_RANGE.max),
+  textColor: z.enum(TEXT_COLOR_KEYS),
+  bold: z.boolean(),
+  italic: z.boolean(),
+  align: z.enum(TEXT_ALIGNS),
 });
 
 // Rodzaju kształtu nie da się zmienić po utworzeniu — reszta tak

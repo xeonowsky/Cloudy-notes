@@ -138,7 +138,8 @@ describe("schematy Board", () => {
     expect(RoadmapEdgeSchema.safeParse({ id: UUID_A, sourceId: UUID_B, targetId: UUID_B }).success).toBe(false);
   });
 
-  const shape = { id: UUID_A, kind: "rect", x: 0, y: 0, w: 200, h: 100, text: "Frontend", color: "brand" };
+  const style = { fontSize: 14, textColor: "ink", bold: false, italic: false, align: "left" };
+  const shape = { id: UUID_A, kind: "rect", x: 0, y: 0, w: 200, h: 100, text: "Frontend", color: "brand", noteId: null, ...style };
 
   it.each([
     ["za mała szerokość", { w: 10 }],
@@ -146,12 +147,30 @@ describe("schematy Board", () => {
     ["nieznany rodzaj", { kind: "circle" }],
     ["nieznany kolor", { color: "gold" }],
     ["za długi tekst", { text: "x".repeat(2_001) }],
+    ["za mała czcionka", { fontSize: 9 }],
+    ["za duża czcionka", { fontSize: 97 }],
+    ["ułamkowa czcionka", { fontSize: 14.5 }],
+    ["nieznany kolor tekstu", { textColor: "gold" }],
+    ["pogrubienie to nie boolean", { bold: "true" }],
+    ["nieznane wyrównanie", { align: "justify" }],
+    ["brak stylu tekstu", { italic: undefined }],
+    ["noteId to nie UUID", { noteId: "abc" }],
+    ["brak noteId (musi być jawny null)", { noteId: undefined }],
   ])("RoadmapShapeSchema odrzuca: %s", (_label, patch) => {
     expect(RoadmapShapeSchema.safeParse(shape).success).toBe(true);
     expect(RoadmapShapeSchema.safeParse({ ...shape, ...patch }).success).toBe(false);
   });
 
+  it("RoadmapShapeSchema zna nowe rodzaje i przyjmuje id notatki", () => {
+    for (const kind of ["sticky", "code", "checklist", "note"]) {
+      expect(RoadmapShapeSchema.safeParse({ ...shape, kind }).success).toBe(true);
+    }
+    expect(RoadmapShapeSchema.safeParse({ ...shape, kind: "note", noteId: UUID_B }).success).toBe(true);
+  });
+
   it("RoadmapShapeUpdateSchema pomija id i rodzaj kształtu", () => {
-    expect(RoadmapShapeUpdateSchema.parse(shape)).toEqual({ x: 0, y: 0, w: 200, h: 100, text: "Frontend", color: "brand" });
+    expect(RoadmapShapeUpdateSchema.parse(shape)).toEqual({
+      x: 0, y: 0, w: 200, h: 100, text: "Frontend", color: "brand", noteId: null, ...style,
+    });
   });
 });

@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import {
   ROADMAP_CATEGORY_HINTS,
   ROADMAP_STATUS_KEYS,
@@ -8,6 +9,9 @@ import {
 type Props = {
   node: RoadmapNode;
   autoFocusTitle: boolean;
+  // Licznik "prośby o fokus" — każda zmiana (np. dwuklik na karcie) ustawia
+  // kursor w polu nazwy. Licznik, a nie boolean, żeby zadziałało też drugi raz.
+  focusTitleSignal?: number;
   // save = false: tylko zmiana na ekranie (pisanie), true: zapis do bazy
   onChange: (patch: Partial<RoadmapNode>, save: boolean) => void;
   onDelete: () => void;
@@ -19,7 +23,20 @@ const inputClass =
 
 // Panel edycji zaznaczonej karty. Tekst zapisujemy przy opuszczeniu pola (onBlur),
 // a nie przy każdym znaku — inaczej wysyłalibyśmy zapytanie po każdym klawiszu.
-export default function NodePanel({ node, autoFocusTitle, onChange, onDelete, onClose }: Props) {
+export default function NodePanel({ node, autoFocusTitle, focusTitleSignal = 0, onChange, onDelete, onClose }: Props) {
+  const titleRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (focusTitleSignal === 0) return;
+    // setTimeout — jak w ShapeView: przeglądarka kończy obsługę dwukliku
+    // i dopiero potem przenosimy fokus, żeby go nie "zabrała"
+    const id = setTimeout(() => {
+      titleRef.current?.focus();
+      titleRef.current?.select();
+    });
+    return () => clearTimeout(id);
+  }, [focusTitleSignal]);
+
   return (
     <aside className="absolute top-4 right-4 z-20 flex w-72 max-w-[calc(100%-2rem)] flex-col gap-4 rounded-2xl border border-line bg-white p-4 shadow-[0_28px_60px_-28px_rgba(22,48,47,0.45)] dark:border-white/10 dark:bg-[#0f1f1e]">
       <div className="flex items-center justify-between">
@@ -37,6 +54,7 @@ export default function NodePanel({ node, autoFocusTitle, onChange, onDelete, on
       <label className="flex flex-col gap-1 text-sm font-medium text-ink dark:text-white">
         Nazwa
         <input
+          ref={titleRef}
           className={inputClass}
           value={node.title}
           maxLength={80}
